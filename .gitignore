@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Airflow runtime
+logs/
+db-data/
+airflow.db
+airflow-webserver.pid
+*.pid
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes / runtime data
+localstack_data/
+
+# Environment (keep .env.example, ignore actual .env)
+.env
+!.env.example
+
+# Misc
+*.workspace
+/git

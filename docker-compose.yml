@@ -1,0 +1,71 @@
+# LocalStack: emulated AWS APIs (Redshift, S3, optional LocalStack MWAA on Ultimate+).
+#
+# For a *real* MWAA-like Airflow locally, use AWS's official repo (builds an MWAA-shaped image):
+#   https://github.com/aws/aws-mwaa-local-runner
+# Do not confuse that with vanilla apache/airflow — see README.md.
+#
+# https://docs.localstack.cloud/aws/licensing/
+
+services:
+  localstack:
+    # Pinned: `latest` (2026.03+) expects LOCALSTACK_AUTH_TOKEN (Hobby/free tier uses same image).
+    # Pin here for offline/no-token smoke tests; for newest features set image: localstack/localstack:latest + token in .env
+    image: localstack/localstack:3.8.1
+    container_name: localstack-mwaa
+    ports:
+      - "127.0.0.1:4566:4566" # AWS API gateway
+      - "127.0.0.1:4510-4560:4510-4560" # MWAA / external service ports (Airflow UI often 4510+)
+    environment:
+      # No `mwaa` here: Airflow runs via aws-mwaa-local-runner; LocalStack `mwaa` often needs a licensed image.
+      - SERVICES=s3,iam,sts,logs,redshift
+      - DEBUG=${DEBUG:-0}
+      - PERSISTENCE=${PERSISTENCE:-1}
+      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN:-}
+      # MWAA DAG sync interval (seconds)
+      - MWAA_S3_POLL_INTERVAL=${MWAA_S3_POLL_INTERVAL:-30}
+      # Passed into init hooks (see localstack-init/ready.d)
+      - ENABLE_LOCALSTACK_MWAA=${ENABLE_LOCALSTACK_MWAA:-0}
+      - MWAA_ENV_NAME=${MWAA_ENV_NAME:-local-mwaa-env}
+      - SEED_MWAA_S3=${SEED_MWAA_S3:-1}
+      - REDSHIFT_WAIT=${REDSHIFT_WAIT:-1}
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./localstack-init/ready.d:/etc/localstack/init/ready.d:ro
+      - ./dags:/opt/dags:ro
+      - ./mwaa-requirements.txt:/opt/mwaa-requirements.txt:ro
+    networks:
+      awslocal:
+        aliases:
+          - localstack.redshift.local
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sf http://127.0.0.1:4566/_localstack/health >/dev/null || python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4566/_localstack/health')\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 40s
+
+  # Interactive SQL against Redshift-compatible endpoint (optional).
+  # Run: docker compose --profile tools run --rm psql-client psql "host=localstack ..."
+  psql-client:
+    profiles: ["tools"]
+    image: postgres:16-alpine
+    container_name: redshift-psql-tools
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - awslocal
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["sleep infinity"]
+
+networks:
+  awslocal:
+    name: awslocal
+
+volumes:
+  localstack_data:

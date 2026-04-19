@@ -1,0 +1,3 @@
+localstack-init/**/*.sh text eol=lf
+aws-mwaa-local-runner/docker/script/*.sh text eol=lf
+aws-mwaa-local-runner/startup_script/*.sh text eol=lf
