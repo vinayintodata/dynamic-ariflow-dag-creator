@@ -1,159 +1,119 @@
 """
-DagRun note demo for MWAA / Airflow Grid View.
+Counter demo: each Python task +1 per second; every 5 seconds it writes **its** task note
+with the current count; succeeds when the count reaches **1_000_000** (override for tests).
 
-Shows the sticky-note control (📝) on a DagRun by updating ``dag_run.set_note()``
-every 30 seconds during a long-running task with a Markdown table (mock progress).
-
-Optional env (local testing):
-  DAGRUN_NOTE_DEMO_RUNNER_SEC — total runner duration in seconds (default: 600).
+Env:
+  DAGRUN_NOTE_DEMO_MAX_COUNT — success when count reaches this (default: 1000000).
+  DAGRUN_NOTE_DEMO_TICK_SEC — seconds between +1 (default: 1).
+  DAGRUN_NOTE_DEMO_NOTE_EVERY — update task note every N counts (default: 5 → every 5s if tick=1).
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import threading
 import time
 from datetime import datetime, timezone
 from textwrap import dedent
 
 from airflow import DAG
-from airflow.models import DagRun
+from airflow.models import TaskInstance
 from airflow.operators.python import PythonOperator
 from airflow.utils.session import create_session
 
 log = logging.getLogger(__name__)
 
 DAG_ID = "dagrun_note_progress_demo"
-NOTE_INTERVAL_SEC = 30
-DEFAULT_RUNNER_SEC = 600
+TASK_NOTE_MAX_LEN = 995
+DEFAULT_MAX_COUNT = 1_000_000
+DEFAULT_TICK_SEC = 1.0
+DEFAULT_NOTE_EVERY = 5
 
 
-def _runner_duration_sec() -> int:
-    raw = os.environ.get("DAGRUN_NOTE_DEMO_RUNNER_SEC", str(DEFAULT_RUNNER_SEC))
+def _max_count() -> int:
+    raw = os.environ.get("DAGRUN_NOTE_DEMO_MAX_COUNT", str(DEFAULT_MAX_COUNT))
     try:
-        return max(NOTE_INTERVAL_SEC, int(raw))
+        return max(0, int(raw))
     except ValueError:
-        return DEFAULT_RUNNER_SEC
+        return DEFAULT_MAX_COUNT
 
 
-def _progress_markdown(completed: int, failed: int, label: str, elapsed_sec: int) -> str:
-    return dedent(
-        f"""\
-        ### {label}
-
-        | Tasks Completed | Tasks Failed |
-        | ---: | ---: |
-        | {completed} | {failed} |
-
-        _Elapsed ~{elapsed_sec}s · UTC {datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")}_
-        """
-    ).strip()
+def _tick_sec() -> float:
+    raw = os.environ.get("DAGRUN_NOTE_DEMO_TICK_SEC", str(DEFAULT_TICK_SEC))
+    try:
+        return max(0.001, float(raw))
+    except ValueError:
+        return DEFAULT_TICK_SEC
 
 
-def _set_note_on_dag_run(dag_id: str, run_id: str, note: str) -> None:
-    """Persist note from a background thread (fresh DB session)."""
+def _note_every() -> int:
+    raw = os.environ.get("DAGRUN_NOTE_DEMO_NOTE_EVERY", str(DEFAULT_NOTE_EVERY))
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_NOTE_EVERY
+
+
+def _set_this_task_note(ti: TaskInstance, body: str) -> None:
+    text = body if len(body) <= TASK_NOTE_MAX_LEN else body[: TASK_NOTE_MAX_LEN - 3] + "..."
     with create_session() as session:
-        dr = (
-            session.query(DagRun)
-            .filter(DagRun.dag_id == dag_id, DagRun.run_id == run_id)
+        tio = (
+            session.query(TaskInstance)
+            .filter(
+                TaskInstance.dag_id == ti.dag_id,
+                TaskInstance.task_id == ti.task_id,
+                TaskInstance.run_id == ti.run_id,
+                TaskInstance.map_index == ti.map_index,
+            )
             .one_or_none()
         )
-        if dr is None:
-            log.warning("DagRun not found dag_id=%s run_id=%s", dag_id, run_id)
+        if tio is None:
+            log.warning(
+                "TaskInstance missing for note dag=%s task=%s run=%s",
+                ti.dag_id,
+                ti.task_id,
+                ti.run_id,
+            )
             return
-        dr.set_note(note)
+        tio.note = text
 
 
-def mock_long_runner(**context) -> None:
+def counting_task(**context) -> None:
     """
-    Simulates ~10 minutes of work while a background loop calls ``set_note`` every 30s.
+    +1 per tick (default 1s sleep). Every ``note_every`` counts, refresh this task's note
+    with the current count. Success when count == max_count.
     """
-    dag_run: DagRun = context["dag_run"]
-    dag_id = dag_run.dag_id
-    run_id = dag_run.run_id
-    total_sec = _runner_duration_sec()
+    ti: TaskInstance = context["ti"]
+    max_count = _max_count()
+    tick = _tick_sec()
+    every = _note_every()
 
-    # Seed note from task context (visible immediately in UI).
-    dag_run.set_note(
-        _progress_markdown(
-            completed=0,
-            failed=0,
-            label="Mock runner — starting",
-            elapsed_sec=0,
-        )
-    )
+    utc = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-    stop = threading.Event()
-    mock_total_units = max(1, total_sec // NOTE_INTERVAL_SEC)
+    def render_note(current: int) -> str:
+        return dedent(
+            f"""\
+            **count (max so far):** `{current}` / `{max_count}`
 
-    def _note_loop() -> None:
-        start = time.monotonic()
-        while not stop.wait(NOTE_INTERVAL_SEC):
-            elapsed = int(time.monotonic() - start)
-            # Mock ramp: "completed" steps increase each interval; optional failure tick for demo.
-            completed = min(mock_total_units, 1 + elapsed // NOTE_INTERVAL_SEC)
-            failed = (
-                1
-                if elapsed > total_sec // 2 and completed < mock_total_units // 3
-                else 0
-            )
-            note = _progress_markdown(
-                completed=completed,
-                failed=failed,
-                label="Live progress (mock)",
-                elapsed_sec=elapsed,
-            )
-            _set_note_on_dag_run(dag_id, run_id, note)
-            log.info("Updated DagRun note (mock completed=%s failed=%s)", completed, failed)
+            _task:_ `{ti.task_id}` · _UTC:_ {utc()}\
+            """
+        ).strip()
 
-    ticker = threading.Thread(target=_note_loop, name="dagrun-note-ticker", daemon=True)
-    ticker.start()
-    try:
-        log.info("Mock runner sleeping %s seconds (note updates every %s s)", total_sec, NOTE_INTERVAL_SEC)
-        time.sleep(total_sec)
-    finally:
-        stop.set()
-        ticker.join(timeout=NOTE_INTERVAL_SEC + 5)
+    if max_count == 0:
+        _set_this_task_note(ti, render_note(0))
+        log.info("MAX_COUNT=0, exiting success")
+        return
 
-    _set_note_on_dag_run(
-        dag_id,
-        run_id,
-        _progress_markdown(
-            completed=mock_total_units,
-            failed=0,
-            label="Mock runner — finished",
-            elapsed_sec=total_sec,
-        ),
-    )
+    count = 0
+    _set_this_task_note(ti, render_note(0))
 
+    while count < max_count:
+        time.sleep(tick)
+        count += 1
+        if count % every == 0 or count >= max_count:
+            _set_this_task_note(ti, render_note(count))
 
-def monitor_pull_context(**context) -> None:
-    """
-    Second task: reads Airflow context, logs a snapshot, and writes a final DagRun note.
-    """
-    dag_run: DagRun = context["dag_run"]
-    ti = context["ti"]
-    snapshot = {
-        "dag_id": dag_run.dag_id,
-        "run_id": dag_run.run_id,
-        "logical_date": str(context.get("logical_date") or context.get("data_interval_start")),
-        "task_id": ti.task_id,
-        "try_number": ti.try_number,
-        "map_index": ti.map_index,
-    }
-    log.info("Monitor context snapshot: %s", snapshot)
-
-    # Final dashboard row: both this DAG's tasks succeeded in a normal run.
-    dag_run.set_note(
-        _progress_markdown(
-            completed=2,
-            failed=0,
-            label="Run finished — monitor task",
-            elapsed_sec=_runner_duration_sec(),
-        )
-        + "\n\n**Context (JSON keys):** `" + "`, `".join(sorted(context.keys())) + "`"
-    )
+    log.info("counter finished at %s", count)
 
 
 default_args = {
@@ -170,26 +130,30 @@ with DAG(
     start_date=datetime(2026, 1, 1),
     schedule_interval=None,
     catchup=False,
-    tags=["demo", "dag_run_note", "mwaa"],
+    tags=["demo", "task_note", "mwaa"],
     doc_md=dedent(
-        """\
-        #### DagRun `set_note()` demo
+        f"""\
+        #### Per-task counter → task notes
 
-        1. Trigger the DAG and open **Grid** view for this run.
-        2. Click the **note** icon on the DagRun to see the Markdown table update about every 30s
-           while **mock_long_runner** is running.
-        3. **monitor_pull_context** logs context fields and sets a final note.
+        Each task sleeps **{_tick_sec()}s** per +1. Every **{_note_every()}** counts (~5s with defaults),
+        **that task's note** (Grid 📝 on the cell) shows:
 
-        Set `DAGRUN_NOTE_DEMO_RUNNER_SEC` (seconds) to shorten the long task locally.
+        `count / {DEFAULT_MAX_COUNT}` (max target).
+
+        Override for local runs: `DAGRUN_NOTE_DEMO_MAX_COUNT=60`, optional `DAGRUN_NOTE_DEMO_TICK_SEC`,
+        `DAGRUN_NOTE_DEMO_NOTE_EVERY`.
+
+        **Parallel tasks** each run their own counter to `MAX_COUNT`.
         """
     ).strip(),
 ) as dag:
-    run_mock = PythonOperator(
-        task_id="mock_long_runner",
-        python_callable=mock_long_runner,
+    counter_a = PythonOperator(
+        task_id="counter_a",
+        python_callable=counting_task,
     )
-    run_monitor = PythonOperator(
-        task_id="monitor_pull_context",
-        python_callable=monitor_pull_context,
+    counter_b = PythonOperator(
+        task_id="counter_b",
+        python_callable=counting_task,
     )
-    run_mock >> run_monitor
+
+    # Two independent counters in parallel; each succeeds at MAX_COUNT.
