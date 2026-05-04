@@ -1,0 +1,5 @@
+environments:
+  - suffix: "__preprod_1"
+    tag: "env:preprod_1"
+  - suffix: "__preprod_2"
+    tag: "env:preprod_2"

@@ -112,8 +112,23 @@ def _convert_retry_delay(raw: str) -> int:
     return 300
 
 
+def _rewrite_conn_ids(data: Any, suffix: str) -> Any:
+    """Recursively append suffix to any string value where the key ends with 'conn_id'."""
+    if isinstance(data, dict):
+        new_dict = {}
+        for k, v in data.items():
+            if isinstance(k, str) and k.endswith("conn_id") and isinstance(v, str):
+                new_dict[k] = f"{v}{suffix}"
+            else:
+                new_dict[k] = _rewrite_conn_ids(v, suffix)
+        return new_dict
+    elif isinstance(data, list):
+        return [_rewrite_conn_ids(item, suffix) for item in data]
+    return data
+
+
 def _build_task(task_id: str, tdata: dict[str, Any],
-                id_remap: dict[str, str]) -> dict[str, Any]:
+                id_remap: dict[str, str], env_suffix: str = "") -> dict[str, Any]:
     """Convert one manifest task entry into a dag-factory task dict.
 
     ``id_remap`` maps the original full task_id (e.g. ``extract.extract_1``)
@@ -178,6 +193,9 @@ def _build_task(task_id: str, tdata: dict[str, Any],
     if tg:
         out["task_group_name"] = tg
 
+    if env_suffix:
+        out = _rewrite_conn_ids(out, env_suffix)
+
     return out
 
 
@@ -192,10 +210,12 @@ def _collect_task_groups(tasks: dict[str, dict]) -> dict[str, dict]:
     return groups
 
 
-def convert_dag(manifest: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def convert_dag(manifest: dict[str, Any], env_suffix: str = "", env_tag: str = "") -> tuple[str, dict[str, Any]]:
     """Convert a single DAG manifest into a dag-factory DAG config dict."""
     dag_section = manifest["dag"]
     dag_id = dag_section["dag_id"]
+    if env_suffix:
+        dag_id = f"{dag_id}{env_suffix}"
 
     dag_cfg: dict[str, Any] = OrderedDict()
 
@@ -205,7 +225,11 @@ def convert_dag(manifest: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     }
     dag_cfg["schedule"] = dag_section.get("schedule", "@daily")
     dag_cfg["catchup"] = dag_section.get("catchup", False)
-    dag_cfg["tags"] = dag_section.get("tags", [])
+    
+    tags = list(dag_section.get("tags", []))
+    if env_tag:
+        tags.append(env_tag)
+    dag_cfg["tags"] = tags
 
     tasks_data = manifest.get("tasks", {})
 
@@ -234,7 +258,7 @@ def convert_dag(manifest: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             continue
         tdata = tasks_data[tid]
         yaml_key = id_remap[tid]
-        tasks_out[yaml_key] = _build_task(tid, tdata, id_remap)
+        tasks_out[yaml_key] = _build_task(tid, tdata, id_remap, env_suffix)
 
     dag_cfg["tasks"] = tasks_out
 
@@ -257,7 +281,27 @@ def main() -> None:
         required=True,
         help="Output path for the dag-factory YAML config.",
     )
+    parser.add_argument(
+        "--env-config",
+        type=Path,
+        help="Path to a YAML file containing environment configurations.",
+    )
     args = parser.parse_args()
+
+    # Load environment config if provided
+    environments = []
+    if args.env_config:
+        if not args.env_config.exists():
+            print(f"ERROR: Env config {args.env_config} not found", file=sys.stderr)
+            sys.exit(1)
+        with open(args.env_config, "r", encoding="utf-8") as f:
+            env_data = yaml.safe_load(f)
+            environments = env_data.get("environments", [])
+    else:
+        # Default fallback if no config provided
+        environments = [
+            {"suffix": "__preprod_1", "tag": "env:preprod_1"}
+        ]
 
     manifest_dir: Path = args.manifest_dir
     if not manifest_dir.is_dir():
@@ -287,11 +331,26 @@ def main() -> None:
         with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = yaml.safe_load(f)
 
-        did, cfg = convert_dag(manifest)
+        # Generate preprod DAG (base)
+        did, cfg = convert_dag(manifest, env_suffix="", env_tag="env:preprod")
         all_dags[did] = cfg
+        
         task_count = len(cfg.get("tasks", {}))
         group_count = len(cfg.get("task_groups", {}))
-        print(f"  {did}: {task_count} tasks, {group_count} task groups")
+        generated_dags = [did]
+        
+        # Generate paired DAGs for each requested environment
+        for env_conf in environments:
+            env_suffix = env_conf.get("suffix", "")
+            env_tag = env_conf.get("tag", "")
+            if not env_suffix:
+                continue
+                
+            did_env, cfg_env = convert_dag(manifest, env_suffix=env_suffix, env_tag=env_tag)
+            all_dags[did_env] = cfg_env
+            generated_dags.append(did_env)
+            
+        print(f"  {' & '.join(generated_dags)}: {task_count} tasks, {group_count} task groups")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:
