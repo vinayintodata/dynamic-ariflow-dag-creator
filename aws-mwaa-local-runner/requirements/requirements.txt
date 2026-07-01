@@ -3,3 +3,4 @@
 apache-airflow-providers-snowflake==5.8.0
 apache-airflow-providers-mysql==5.7.3
 dag-factory
+apache-airflow-providers-dbt-cloud

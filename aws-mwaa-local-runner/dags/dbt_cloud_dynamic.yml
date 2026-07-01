@@ -1,0 +1,34 @@
+dbt_cloud_dynamic_dag:
+  default_args:
+    owner: airflow
+    start_date: '2025-01-01T00:00:00+00:00'
+  schedule: '@daily'
+  catchup: false
+  tags:
+    - dbt
+    - dynamic
+  tasks:
+    start:
+      operator: airflow.providers.standard.operators.empty.EmptyOperator
+    task1_run_dbt_job:
+      operator: include.dbt_custom.DbtCloudRunJobByNameOperator
+      dbt_cloud_conn_id: '{{ env_config.dbt_conn_id }}'
+      job_name: '{{ env_config.dbt_job_name }}'
+      wait_for_termination: true
+      steps_override:
+        - "dbt run --select my_model"
+      dependencies:
+        - start
+    task2_run_dbt_job:
+      operator: include.dbt_custom.DbtCloudRunJobByNameOperator
+      dbt_cloud_conn_id: '{{ env_config.dbt_conn_id }}'
+      job_name: '{{ env_config.dbt_job_name }}'
+      wait_for_termination: true
+      steps_override:
+        - "dbt test --select model_b"
+      dependencies:
+        - task1_run_dbt_job
+    end:
+      operator: airflow.providers.standard.operators.empty.EmptyOperator
+      dependencies:
+        - task2_run_dbt_job

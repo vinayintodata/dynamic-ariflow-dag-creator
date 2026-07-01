@@ -1,0 +1,36 @@
+# This is a template DAG showing how to invoke an AWS Lambda function from Airflow
+lambda_demo_dag:
+  default_args:
+    owner: airflow
+    start_date: '2025-01-01T00:00:00+00:00'
+  schedule: '@daily'
+  catchup: false
+  tags:
+    - aws
+    - lambda
+    - template
+  tasks:
+    start:
+      operator: airflow.providers.standard.operators.empty.EmptyOperator
+      
+    trigger_my_lambda:
+      operator: airflow.providers.amazon.aws.operators.lambda_function.LambdaInvokeFunctionOperator
+      # The name or ARN of your lambda function
+      function_name: "my_lambda_function_name"
+      
+      # Optional: The AWS connection ID (if not using the default 'aws_default')
+      aws_conn_id: "aws_default"
+      
+      # The payload to send to the Lambda function. It must be a valid JSON string.
+      payload: '{"key1": "value1", "key2": "value2"}'
+      
+      # Setting log_type to "Tail" will include the execution log in the response
+      log_type: "Tail"
+      
+      dependencies:
+        - start
+        
+    end:
+      operator: airflow.providers.standard.operators.empty.EmptyOperator
+      dependencies:
+        - trigger_my_lambda

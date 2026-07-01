@@ -1,0 +1,61 @@
+# Template for calling Snowflake Stored Procedures and SQL files
+snowflake_demo_dag:
+  default_args:
+    owner: airflow
+    start_date: '2025-01-01T00:00:00+00:00'
+  schedule: '@daily'
+  catchup: false
+  tags:
+    - snowflake
+    - template
+  # By setting template_searchpath, the operators can find the .sql files
+  template_searchpath: '/usr/local/airflow/dags/sql'
+  tasks:
+    start:
+      operator: airflow.providers.standard.operators.empty.EmptyOperator
+      
+    run_sql_file:
+      # SQLExecuteQueryOperator is the modern standard operator for DB queries
+      operator: airflow.providers.common.sql.operators.sql.SQLExecuteQueryOperator
+      conn_id: '{{ env_config.snowflake_conn_id }}'
+      
+      # Point directly to the .sql file.
+      sql: 'my_query.sql'
+      
+      # Set this to true to allow multiple semicolon-separated queries inside the .sql file
+      split_statements: true
+      
+      dependencies:
+        - start
+        
+    call_stored_procedure:
+      operator: airflow.providers.common.sql.operators.sql.SQLExecuteQueryOperator
+      conn_id: '{{ env_config.snowflake_conn_id }}'
+      
+      # You can also pass the query inline to call a stored procedure
+      sql: "CALL my_database.my_schema.my_stored_procedure('{{ env_config.suffix }}');"
+      
+      dependencies:
+        - run_sql_file
+
+    run_multiple_queries:
+      operator: airflow.providers.common.sql.operators.sql.SQLExecuteQueryOperator
+      conn_id: '{{ env_config.snowflake_conn_id }}'
+      
+      # You can pass a list of SQL queries or files! 
+      # They will be executed sequentially in the same task.
+      sql:
+        - "my_query.sql"
+        - "CALL my_database.my_schema.another_procedure();"
+        - "SELECT CURRENT_TIMESTAMP();"
+        
+      # Setting split_statements allows you to pass a single block of text with multiple semicolons
+      split_statements: true
+      
+      dependencies:
+        - call_stored_procedure
+        
+    end:
+      operator: airflow.providers.standard.operators.empty.EmptyOperator
+      dependencies:
+        - run_multiple_queries

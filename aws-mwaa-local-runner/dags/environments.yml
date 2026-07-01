@@ -1,0 +1,21 @@
+environments:
+  preprod:
+    suffix: ""
+    tags: ["env:preprod"]
+    dbt_conn_id: "dbt_cloud_default"
+    dbt_job_name: "my_dbt_job_preprod"
+    snowflake_conn_id: "snowflake_default"
+
+  preprod_1:
+    suffix: "__preprod_1"
+    tags: ["env:preprod_1"]
+    dbt_conn_id: "dbt_cloud_default"
+    dbt_job_name: "my_dbt_job_preprod_1"
+    snowflake_conn_id: "snowflake_default"
+
+  preprod_2:
+    suffix: "__preprod_2"
+    tags: ["env:preprod_2"]
+    dbt_conn_id: "dbt_cloud_default"
+    dbt_job_name: "my_dbt_job_preprod_2"
+    snowflake_conn_id: "snowflake_default"

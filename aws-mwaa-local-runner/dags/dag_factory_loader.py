@@ -220,29 +220,69 @@ def _build_dag(dag_id: str, dag_config: dict[str, Any]) -> DAG:
     return dag
 
 
-def load_yaml_dags(config_path: Path, globals_dict: dict) -> None:
-    """Load all DAGs from a single YAML config file."""
+def load_yaml_dags(config_path: Path, globals_dict: dict, environments: dict) -> None:
+    """Load all DAGs from a single YAML config file, rendering it for each environment."""
+    import jinja2
     with open(config_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    if not config:
-        return
-    for dag_id, dag_config in config.items():
-        if dag_id == "default":
-            continue
-        if not isinstance(dag_config, dict):
-            continue
+        template_str = f.read()
+
+    for env_name, env_vars in environments.items():
         try:
-            dag = _build_dag(dag_id, dag_config)
-            globals_dict[dag_id] = dag
+            rendered_yaml = jinja2.Template(template_str).render(env_config=env_vars)
+            config = yaml.safe_load(rendered_yaml)
         except Exception:
-            log.exception("Failed to build DAG '%s' from %s", dag_id, config_path)
+            log.exception("Failed to render YAML for env '%s' from %s", env_name, config_path)
+            continue
+            
+        if not config:
+            continue
+        for dag_id, dag_config in config.items():
+            if dag_id == "default":
+                continue
+            if not isinstance(dag_config, dict):
+                continue
+                
+            # Automatically append suffix
+            real_dag_id = f"{dag_id}{env_vars.get('suffix', '')}"
+            
+            # Automatically append tags
+            if "tags" not in dag_config:
+                dag_config["tags"] = []
+            if isinstance(dag_config["tags"], list):
+                dag_config["tags"].extend(env_vars.get("tags", []))
+                
+            # Automatically inject global failure callback
+            if "default_args" not in dag_config:
+                dag_config["default_args"] = {}
+            if "on_failure_callback" not in dag_config["default_args"]:
+                dag_config["default_args"]["on_failure_callback"] = "include.alerts.send_failure_email"
+
+            try:
+                dag = _build_dag(real_dag_id, dag_config)
+                globals_dict[real_dag_id] = dag
+            except Exception:
+                log.exception("Failed to build DAG '%s' from %s", real_dag_id, config_path)
 
 
 def discover_and_load(dags_dir: Path, globals_dict: dict) -> None:
     """Recursively find all YAML files under dags_dir and load DAGs from them."""
+    env_path = dags_dir / "environments.yml"
+    environments = {}
+    if env_path.exists():
+        with open(env_path, "r", encoding="utf-8") as f:
+            env_config = yaml.safe_load(f)
+            if env_config and "environments" in env_config:
+                environments = env_config["environments"]
+    
+    # If no environments defined, provide a fallback default
+    if not environments:
+        environments = {"default": {"suffix": "", "tags": []}}
+
     for pattern in ("**/*.yml", "**/*.yaml"):
         for yml_path in sorted(dags_dir.glob(pattern)):
-            load_yaml_dags(yml_path, globals_dict)
+            if yml_path.name == "environments.yml":
+                continue
+            load_yaml_dags(yml_path, globals_dict, environments)
 
 
 discover_and_load(DAGS_DIR, globals())
