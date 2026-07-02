@@ -9,8 +9,9 @@ from datetime import datetime
 
 log = logging.getLogger(__name__)
 
-AIRFLOW_HOME = os.environ.get("AIRFLOW_HOME", "/usr/local/airflow")
-DATA_DIR = os.path.join(AIRFLOW_HOME, "data")
+import tempfile
+
+DATA_DIR = os.path.join(tempfile.gettempdir(), "airflow_data")
 READY_FILE = os.path.join(DATA_DIR, "from_a", "ready.txt")
 
 

@@ -113,7 +113,7 @@ dag_a:
       operator: airflow.providers.standard.operators.python.PythonOperator
       python_callable: include.dag_a_callables.write_ready_file
       op_args:
-      - /opt/airflow/data/from_a/ready.txt
+      - /tmp/airflow_data/from_a/ready.txt
       dependencies:
       - load_3
     a_complete:

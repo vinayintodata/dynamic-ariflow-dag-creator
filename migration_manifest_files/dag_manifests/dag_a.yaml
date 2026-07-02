@@ -1203,7 +1203,7 @@ tasks:
       parent_task_group: null
     operator_call_args:
       op_args:
-      - /opt/airflow/data/from_a/ready.txt
+      - /tmp/airflow_data/from_a/ready.txt
       op_kwargs: {}
       python_callable: <callable write_ready_file>
     allow_nested_operators: true

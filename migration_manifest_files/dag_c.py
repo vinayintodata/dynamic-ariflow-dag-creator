@@ -10,7 +10,7 @@ from airflow.sensors.python import PythonSensor
 from airflow.utils.task_group import TaskGroup
 
 
-READY_FILE = "/opt/airflow/data/from_a/ready.txt"
+READY_FILE = "/tmp/airflow_data/from_a/ready.txt"
 
 
 def _ready_file_exists() -> bool:

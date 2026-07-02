@@ -8,8 +8,10 @@ import os
 
 log = logging.getLogger(__name__)
 
-AIRFLOW_HOME = os.environ.get("AIRFLOW_HOME", "/usr/local/airflow")
-READY_FILE = os.path.join(AIRFLOW_HOME, "data", "from_a", "ready.txt")
+import tempfile
+
+DATA_DIR = os.path.join(tempfile.gettempdir(), "airflow_data")
+READY_FILE = os.path.join(DATA_DIR, "from_a", "ready.txt")
 
 
 def _ready_file_exists() -> bool:

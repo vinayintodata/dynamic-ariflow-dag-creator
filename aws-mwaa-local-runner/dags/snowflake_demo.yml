@@ -9,7 +9,7 @@ snowflake_demo_dag:
     - snowflake
     - template
   # By setting template_searchpath, the operators can find the .sql files
-  template_searchpath: '/usr/local/airflow/dags/sql'
+  template_searchpath: 'sql'
   tasks:
     start:
       operator: airflow.providers.standard.operators.empty.EmptyOperator

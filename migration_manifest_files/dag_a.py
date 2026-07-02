@@ -12,7 +12,7 @@ from airflow.utils.task_group import TaskGroup
 from airflow.utils.trigger_rule import TriggerRule
 
 
-DATA_DIR = "/opt/airflow/data"
+DATA_DIR = "/tmp/airflow_data"
 READY_FILE = os.path.join(DATA_DIR, "from_a", "ready.txt")
 
 
